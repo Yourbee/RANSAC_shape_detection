@@ -10,5 +10,12 @@ FILE(GLOB SRC "./*.cpp")
 FILE(GLOB MISC_SRC "./MiscLib/*.cpp")
 
 add_library(libransac STATIC  ${SRC} ${MISC_SRC})
+
+find_package(PCL REQUIRED)
+add_definitions(${PCL_DEFINITIONS})
+include_directories(${PCL_INCLUDE_DIRS})
+link_directories(${PCL_LIBRARY_DIRS})
+
 add_executable(main main.cpp)
-target_link_libraries(main libransac)
+
+target_link_libraries(main libransac ${PCL_LIBRARIES})

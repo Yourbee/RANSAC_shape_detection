@@ -2,8 +2,8 @@
 #define GRID_HEADER
 
 #ifndef WIN32
-#include <ext/hash_map>
-#define stdext __gnu_cxx
+#include <unordered_map>
+#define stdext std
 #else
 #include <hash_map>
 #endif
@@ -195,7 +195,7 @@ class HashGridAccessor
 {
 public:
 	HashGridAccessor(const size_t *factors, size_t hashKey,
-		stdext::hash_map< size_t, CellT > &hash)
+		stdext::unordered_map< size_t, CellT > &hash)
 	: m_factors(factors)
 	, m_hashKey(hashKey)
 	, m_hash(hash)
@@ -210,7 +210,7 @@ public:
 private:
 	const size_t *m_factors;
 	size_t m_hashKey;
-	stdext::hash_map< size_t, CellT > &m_hash;
+	stdext::unordered_map< size_t, CellT > &m_hash;
 };
 
 template< class CellT >
@@ -218,7 +218,7 @@ class HashGridAccessor< CellT, 0 >
 {
 public:
 	HashGridAccessor(const size_t *, size_t hashKey,
-		stdext::hash_map< size_t, CellT > &hash)
+		stdext::unordered_map< size_t, CellT > &hash)
 	: m_hashKey(hashKey)
 	, m_hash(hash)
 	{}
@@ -245,7 +245,7 @@ public:
 
 private:
 	size_t m_hashKey;
-	stdext::hash_map< size_t, CellT > &m_hash;
+	stdext::unordered_map< size_t, CellT > &m_hash;
 };
 
 template< class CellT, unsigned int DimT >
@@ -253,7 +253,7 @@ class ConstHashGridAccessor
 {
 public:
 	ConstHashGridAccessor(const size_t *factors, size_t hashKey,
-		const stdext::hash_map< size_t, CellT > &hash)
+		const stdext::unordered_map< size_t, CellT > &hash)
 	: m_factors(factors)
 	, m_hashKey(hashKey)
 	, m_hash(hash)
@@ -268,7 +268,7 @@ public:
 private:
 	const size_t *m_factors;
 	size_t m_hashKey;
-	const stdext::hash_map< size_t, CellT > &m_hash;
+	const stdext::unordered_map< size_t, CellT > &m_hash;
 };
 
 template< class CellT >
@@ -276,14 +276,14 @@ class ConstHashGridAccessor< CellT, 0 >
 {
 public:
 	ConstHashGridAccessor(const size_t *, size_t hashKey,
-		const stdext::hash_map< size_t, CellT > &hash)
+		const stdext::unordered_map< size_t, CellT > &hash)
 	: m_hashKey(hashKey)
 	, m_hash(hash)
 	{}
 
 	operator const CellT *()
 	{
-		typename stdext::hash_map< size_t, CellT >::const_iterator i =
+		typename stdext::unordered_map< size_t, CellT >::const_iterator i =
 			m_hash.find(m_hashKey);
 		if(i != m_hash.end())
 			return &i->second;
@@ -292,15 +292,15 @@ public:
 
 private:
 	size_t m_hashKey;
-	const stdext::hash_map< size_t, CellT > &m_hash;
+	const stdext::unordered_map< size_t, CellT > &m_hash;
 };
 
 template< class CellT, unsigned int DimT >
 class HashGrid
 {
 public:
-	typedef typename stdext::hash_map< size_t, CellT >::iterator iterator;
-	typedef typename stdext::hash_map< size_t, CellT >::const_iterator
+	typedef typename stdext::unordered_map< size_t, CellT >::iterator iterator;
+	typedef typename stdext::unordered_map< size_t, CellT >::const_iterator
 		const_iterator;
 
 	HashGrid()
@@ -384,7 +384,7 @@ private:
 
 private:
 	size_t m_factors[DimT];
-	stdext::hash_map< size_t, CellT > m_hash;
+	stdext::unordered_map< size_t, CellT > m_hash;
 };
 
 #endif

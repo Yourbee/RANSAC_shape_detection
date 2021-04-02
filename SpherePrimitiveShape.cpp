@@ -199,7 +199,7 @@ void SpherePrimitiveShape::Project(const Vec3f &p, Vec3f *pp) const
 	m_sphere.Project(p, pp);
 }
 
-void SpherePrimitiveShape::Normal(const Vec3f &p, Vec3f *n) const
+void SpherePrimitiveShape::Normal(Vec3f &p, Vec3f *n) const
 {
 	m_sphere.Normal(p, n);
 }

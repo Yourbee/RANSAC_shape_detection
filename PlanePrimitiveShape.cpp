@@ -62,8 +62,9 @@ void PlanePrimitiveShape::Project(const Vec3f &p, Vec3f *pp) const
 		* m_plane.getNormal());
 }
 
-void PlanePrimitiveShape::Normal(const Vec3f &p, Vec3f *n) const
+void PlanePrimitiveShape::Normal(Vec3f &p, Vec3f *n) const
 {
+	p[0] = m_plane.SignedDistToOrigin();
 	*n = m_plane.getNormal();
 }
 

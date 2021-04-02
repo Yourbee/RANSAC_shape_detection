@@ -70,7 +70,7 @@ void CylinderPrimitiveShape::Project(const Vec3f &p, Vec3f *pp) const
 	m_cylinder.Project(p, pp);
 }
 
-void CylinderPrimitiveShape::Normal(const Vec3f &p, Vec3f *n) const
+void CylinderPrimitiveShape::Normal(Vec3f &p, Vec3f *n) const
 {
 	m_cylinder.Normal(p, n);
 }

@@ -61,7 +61,7 @@ void ConePrimitiveShape::Project(const Vec3f &p, Vec3f *pp) const
 	m_cone.Project(p, pp);
 }
 
-void ConePrimitiveShape::Normal(const Vec3f &p, Vec3f *n) const
+void ConePrimitiveShape::Normal(Vec3f &p, Vec3f *n) const
 {
 	m_cone.Normal(p, n);
 }

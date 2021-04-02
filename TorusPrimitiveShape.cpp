@@ -62,7 +62,7 @@ void TorusPrimitiveShape::Project(const Vec3f &p, Vec3f *pp) const
 	m_torus.Project(p, pp);
 }
 
-void TorusPrimitiveShape::Normal(const Vec3f &p, Vec3f *n) const
+void TorusPrimitiveShape::Normal(Vec3f &p, Vec3f *n) const
 {
 	m_torus.Normal(p, n);
 }

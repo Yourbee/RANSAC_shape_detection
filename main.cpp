@@ -1,18 +1,68 @@
 ﻿// Taken from https://github.com/ihmcrobotics/ihmc-open-robotics-software/blob/5f5345ea78f681c1ca815bb1539041b5d0ab54d0/ihmc-sensor-processing/csrc/ransac_schnabel/main.cpp
 
-#include <PointCloud.h>
-#include <RansacShapeDetector.h>
-#include <PlanePrimitiveShapeConstructor.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/visualization/cloud_viewer.h>
 
-#include <opencv2/opencv.hpp>
-
-#include <iostream>
+#include <PointCloud.h>
+#include <RansacShapeDetector.h>
+#include <PlanePrimitiveShapeConstructor.h>
 
 using std::cout;
 using std::endl;
+
+//wrong
+int readTXT(std::string file_path, pcl::PointCloud<pcl::PointXYZRGB>& cloud)
+{
+	fstream file;
+	file.open(file_path, ios::in);
+	if (!file)
+	{
+		cout << "Can't open " << file_path << endl;
+		return -1;
+	}
+	std::string line;
+	while (std::getline(file, line))
+	{
+		std::stringstream ss(line);
+		std::vector<std::string> v_str;
+		std::string s;
+		while (std::getline(ss, s, ' '))
+		{
+			v_str.push_back(s);
+		}
+		if (v_str.size() < 6) {
+			cout << "格式不支持" << endl;
+			return -1;
+		}
+
+		cout << std::fixed << std::setprecision(8);
+		pcl::PointXYZRGB p;
+		p.x = std::stod(v_str[0]);
+		p.y = std::stod(v_str[1]);
+		p.z = std::stod(v_str[2]);
+
+		p.r = std::stoi(v_str[3]);
+		p.g = std::stoi(v_str[4]);
+		p.b = std::stoi(v_str[5]);
+
+		cloud.push_back(p);
+	}
+	cout << cloud[0].x << " "
+		<< cloud[0].y << " "
+		<< cloud[0].z << " "
+		<< cloud[0].r << " "
+		<< cloud[0].g << " "
+		<< cloud[0].b << " " << endl;
+	cout << "File read " << cloud.width * cloud.height << " points" << endl;
+	return 0;
+}
 
 int move2XOY(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
 {
@@ -124,6 +174,16 @@ int showPointFlat(std::vector<pcl::PointCloud<pcl::PointXYZRGB>::Ptr> v_cloud)
 	return 0;
 }
 
+size_t calcSize(std::vector<std::vector<cv::Point2f>> p_2d)
+{
+	size_t num = 0;
+	for (auto& p : p_2d)
+	{
+		num += p.size();
+	}
+	return num;
+}
+
 int main(int argc, char** argv)
 {
 	if (argc != 2)
@@ -133,15 +193,14 @@ int main(int argc, char** argv)
 	}
 
 	// 读取点云
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	//std::string file = "house1.pcd";
-	//std::string file_path = "C:/Users/myqiu/Desktop/pts_data_file/house/" + file;
 	std::string file_path = argv[1];
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 	if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file_path, *cloud) == -1)
 	{
 		cout << "Cloud reading failed." << endl;
 		return -1;
 	}
+	//showPoint(cloud);
 	std::uint32_t n_points = cloud->width * cloud->height;
 	cout << "Total points: " << n_points << endl;
 
@@ -195,7 +254,7 @@ int main(int argc, char** argv)
 	detector.Add(new PlanePrimitiveShapeConstructor());
 
 	MiscLib::Vector< std::pair< MiscLib::RefCountPtr< PrimitiveShape >, size_t > > shapes; // stores the detected shapes
-	size_t remaining = detector.Detect(pc, 0, pc.size(), &shapes); // run detection
+	size_t n_remained = detector.Detect(pc, 0, pc.size(), &shapes); // run detection
 		// returns number of unassigned points
 		// the array shapes is filled with pointers to the detected shapes
 		// the second element per shapes gives the number of points assigned to that primitive (the support)
@@ -204,7 +263,7 @@ int main(int argc, char** argv)
 		// the points of shape i are found in the range
 		// [ pc.size() - \sum_{j=0..i} shapes[j].second, pc.size() - \sum_{j=0..i-1} shapes[j].second )
 
-	cout << "remaining unassigned points " << remaining << endl;
+	cout << "remaining unassigned points " << n_remained << endl;
 	for(int i = 0; i < shapes.size(); ++i)
 	{
 		Vec3f normal(0, 0, 0);
@@ -253,7 +312,7 @@ int main(int argc, char** argv)
 		}
 		rend += shapes[i].second;
 	}
-	showPoint(v_cloud);
+	//showPoint(v_cloud);
 
 	//计算相互之间的垂直度
 	std::vector<float> loss_rect(v_cloud.size(), 0);
@@ -287,7 +346,8 @@ int main(int argc, char** argv)
 	cout << endl;
 
 	//转到OpenCV格式
-	std::vector<cv::Point2f> imagePoints;
+	std::vector<std::vector<cv::Point2f>> p_2ds;
+	std::vector<cv::Point2f> normals_2d;
 	pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("3D Viewer"));
 	for (size_t i = 0; i < v_cloud.size(); ++i)
 	{
@@ -295,62 +355,115 @@ int main(int argc, char** argv)
 		{
 			continue;
 		}
+		std::vector<cv::Point2f> p_2d;
 		for (auto& p : *v_cloud[i])
 		{
-			imagePoints.emplace_back(p.x, p.y);
+			p_2d.emplace_back(p.x, p.y);
 		}
+		p_2ds.push_back(p_2d);
+		normals_2d.emplace_back(v_normals[i][0], v_normals[i][1]);
+
 		std::string cloud_name = "Cloud " + std::to_string(i);
 		viewer->addPointCloud<pcl::PointXYZRGB>(v_cloud[i], cloud_name);
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, cloud_name);
 	}
-	cout << imagePoints.size() << endl;
-	viewer->spin();
+	cout << calcSize(p_2ds) << endl;
+	//viewer->spin();
 
 	//旋转最垂直边到x轴，
-	// calculate the least rect loss plane's 2D theta to (0, -1)
 	Eigen::Vector4f l_rl = v_normals[arg_loss_rect[0]];
 	double theta_2d = acos(-l_rl[1] / sqrt(1.0 * l_rl[0] * l_rl[0] + 1.0 * l_rl[1] * l_rl[1])) / M_PI * 180.0;
 	cout << "Rotate degree " << theta_2d << endl;
 	theta_2d = l_rl[0] < 0 ? -theta_2d : theta_2d;
 	cv::Mat rotation_mat = cv::getRotationMatrix2D(cv::Point2f(0, 0), theta_2d, 1);
-	std::vector<cv::Point2f> rotated_points;
-	rotated_points.resize(imagePoints.size());
-	cv::transform(imagePoints, rotated_points, rotation_mat);
-	//拟合矩形
-	cv::RotatedRect rect = cv::minAreaRect(rotated_points);
-	cv::Point2f P[4];
-	rect.points(P);
-	//cv::Rect rect = cv::boundingRect(imagePoints);
-	//P[0].x = rect.x; P[0].y = rect.y;
-	//P[1].x = rect.x + rect.width; P[1].y = rect.y;
-	//P[2].x = rect.x + rect.width; P[2].y = rect.y + rect.height;
-	//P[3].x = rect.x; P[3].y = rect.y + rect.height;
+	
+	std::vector< std::vector<cv::Point2f>> rotated_points;
+	for (auto& p : p_2ds)
+	{
+		std::vector<cv::Point2f> rotated_point;
+		rotated_point.resize(p.size());
+		cv::transform(p, rotated_point, rotation_mat);
+		rotated_points.push_back(rotated_point);
+	}
+	std::vector<cv::Point2f> rotated_normals;
+	cv::transform(normals_2d, rotated_normals, rotation_mat);
+
+	
 	//遍历 寻找x y最大最小值
 	float x_minus = 0, y_minus = 0, x_plus = 0, y_plus = 0;
-	for (auto& p : rotated_points)
+	for (auto& rotated_point : rotated_points)
 	{
-		if (x_minus > p.x) x_minus = p.x;
-		else if (x_plus < p.x) x_plus = p.x;
+		for (auto& p : rotated_point)
+		{
+			if (x_minus > p.x) x_minus = p.x;
+			else if (x_plus < p.x) x_plus = p.x;
 
-		if (y_minus > p.y) y_minus = p.y;
-		else if (y_plus < p.y) y_plus = p.y;
+			if (y_minus > p.y) y_minus = p.y;
+			else if (y_plus < p.y) y_plus = p.y;
+		}
 	}
-	if (x_plus - 0 < 0.1)
+
+	if (x_plus - 0 < 0.1 || 0 - x_minus < 0.1 || y_plus - 0 < 0.1 || 0 - y_minus < 0.1)
 	{
 		cout << "不完整房屋。" << endl;
-		assert(0);
+		return -1;
 	}
-	cout << "面积： " << (x_plus - x_minus) * (y_plus - y_minus) << endl;
+	float min_area_rect = (x_plus - x_minus) * (y_plus - y_minus);
 
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr rotated_points_3d(new pcl::PointCloud<pcl::PointXYZRGB>);
-	rotated_points_3d->reserve(rotated_points.size());
-	for (auto& p : rotated_points)
+	cout << "法向量：" << endl;
+	for (auto& n : rotated_normals)
 	{
-		//cout << "p_i " << p_i << endl;
-		pcl::PointXYZRGB point;
-		point.x = p.x; point.y = p.y; point.z = 0;
-		point.r = 255; point.g = 255; point.b = 255;
-		rotated_points_3d->push_back(point);
+		cout << n.x << " " << n.y << endl;
+	}
+
+	float x_minus_in = x_minus, y_minus_in = y_minus;
+	float x_plus_in = x_plus, y_plus_in = y_plus;
+	for (size_t i = 0; i < rotated_normals.size(); ++i)
+	{
+		std::vector<cv::Point2f>& p = rotated_points[i];
+		if (-0.5 > rotated_normals[i].y)
+		{
+			float temp = (*std::max_element(p.begin(), p.end(),
+				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
+			y_minus_in = temp > y_minus_in ? temp : y_minus_in;
+		}
+		else if (0.5 < rotated_normals[i].y)
+		{
+			float temp = (*std::min_element(p.begin(), p.end(),
+				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
+			y_plus_in = temp < y_plus_in ? temp : y_plus_in;
+		}
+		if (-0.5 > rotated_normals[i].x)
+		{
+			float temp = (*std::max_element(p.begin(), p.end(),
+				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
+			x_minus_in = temp > x_minus_in ? temp : x_minus_in;
+		}
+		else if (0.5 < rotated_normals[i].x)
+		{
+			float temp = (*std::min_element(p.begin(), p.end(),
+				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
+			x_plus_in = temp < x_plus_in ? temp : x_plus_in;
+		}
+	}
+	float max_area_rect = (x_plus_in - x_minus_in) * (y_plus_in - y_minus_in);
+
+	cout << "外接面积： " << min_area_rect << endl;
+	cout << "内接面积： " << max_area_rect << endl;
+
+	// 显示带框 二维点云
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr rotated_points_3d(new pcl::PointCloud<pcl::PointXYZRGB>);
+	rotated_points_3d->reserve(calcSize(rotated_points));
+	for (auto& rotated_point : rotated_points)
+	{
+		for (auto& p : rotated_point)
+		{
+			//cout << "p_i " << p_i << endl;
+			pcl::PointXYZRGB point;
+			point.x = p.x; point.y = p.y; point.z = 0;
+			point.r = 255; point.g = 255; point.b = 255;
+			rotated_points_3d->push_back(point);
+		}
 	}
 
 	pcl::visualization::PCLVisualizer::Ptr viewer2(new pcl::visualization::PCLVisualizer("3D Viewer"));
@@ -359,10 +472,6 @@ int main(int argc, char** argv)
 	viewer2->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, "rotated_points_3d");
 
 	pcl::PointXYZ p1, p2, p3, p4;
-	//p1.x = P[0].x; p1.y = P[0].y; p1.z = 0;
-	//p2.x = P[1].x; p2.y = P[1].y; p2.z = 0;
-	//p3.x = P[2].x; p3.y = P[2].y; p3.z = 0;
-	//p4.x = P[3].x; p4.y = P[3].y; p4.z = 0;
 	p1.x = x_minus; p1.y = y_minus; p1.z = 0;
 	p2.x = x_plus; p2.y = y_minus; p2.z = 0;
 	p3.x = x_plus; p3.y = y_plus; p3.z = 0;
@@ -371,6 +480,17 @@ int main(int argc, char** argv)
 	viewer2->addLine(p2, p3, "line2");
 	viewer2->addLine(p3, p4, "line3");
 	viewer2->addLine(p4, p1, "line4");
+
+	pcl::PointXYZ p1_in, p2_in, p3_in, p4_in;
+	p1_in.x = x_minus_in; p1_in.y = y_minus_in; p1_in.z = 0;
+	p2_in.x = x_plus_in; p2_in.y = y_minus_in; p2_in.z = 0;
+	p3_in.x = x_plus_in; p3_in.y = y_plus_in; p3_in.z = 0;
+	p4_in.x = x_minus_in; p4_in.y = y_plus_in; p4_in.z = 0;
+	viewer2->addLine(p1_in, p2_in, "line1_in");
+	viewer2->addLine(p2_in, p3_in, "line2_in");
+	viewer2->addLine(p3_in, p4_in, "line3_in");
+	viewer2->addLine(p4_in, p1_in, "line4_in");
+
 	viewer2->addCoordinateSystem();
 
 	viewer2->spin();

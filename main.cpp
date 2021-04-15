@@ -4,6 +4,12 @@
 #include <fstream>
 #include <sstream>
 
+#include <boost/program_options.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/log/expressions.hpp>
+#include <boost/log/utility/setup/console.hpp>
+
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -16,6 +22,8 @@
 
 using std::cout;
 using std::endl;
+namespace bpo = boost::program_options;
+namespace blog = boost::log;
 
 //wrong
 int readTXT(std::string file_path, pcl::PointCloud<pcl::PointXYZRGB>& cloud)
@@ -93,6 +101,11 @@ int move2XOY(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
 		p.y -= y_mid;
 		p.z -= z_min;
 	}
+	BOOST_LOG_TRIVIAL(trace) << "x_min " << x_min;
+	BOOST_LOG_TRIVIAL(trace) << "y_min " << y_min;
+	BOOST_LOG_TRIVIAL(trace) << "z_min " << z_min;
+	BOOST_LOG_TRIVIAL(trace) << "x_max " << x_max;
+	BOOST_LOG_TRIVIAL(trace) << "y_max " << y_max;
 	return 0;
 }
 
@@ -174,6 +187,21 @@ int showPointFlat(std::vector<pcl::PointCloud<pcl::PointXYZRGB>::Ptr> v_cloud)
 	return 0;
 }
 
+int initBoostLog(int level)
+{
+	switch (level)
+	{
+	case 1: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::trace); break;
+	case 2: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::debug); break;
+	case 3: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::info); break;
+	case 4: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::warning); break;
+	case 5: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::error); break;
+	case 6: blog::core::get()->set_filter(blog::trivial::severity >= blog::trivial::fatal); break;
+	default: BOOST_LOG_TRIVIAL(error) << "boost log severity setting wrong"; return -1;  break;
+	}
+	return 0;
+}
+
 size_t calcSize(std::vector<std::vector<cv::Point2f>> p_2d)
 {
 	size_t num = 0;
@@ -184,70 +212,13 @@ size_t calcSize(std::vector<std::vector<cv::Point2f>> p_2d)
 	return num;
 }
 
-int main(int argc, char** argv)
+void ransacHouseAreaCalc(
+	PointCloud& pc,
+	int const verticalThreshhold,
+	RansacShapeDetector::Options& ransacOptions)
 {
-	if (argc != 2)
-	{
-		cout << "Usage: main <pc path>" << endl;
-		return -1;
-	}
-
-	// 读取点云
-	std::string file_path = argv[1];
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file_path, *cloud) == -1)
-	{
-		cout << "Cloud reading failed." << endl;
-		return -1;
-	}
-	//showPoint(cloud);
-	std::uint32_t n_points = cloud->width * cloud->height;
-	cout << "Total points: " << n_points << endl;
-
-	move2XOY(cloud);  //移动到原点
-
-	//x, y, z最大最小值，用来计算尺度
-	float min_x = std::numeric_limits<float>::max();
-	float min_y = std::numeric_limits<float>::max();
-	float min_z = std::numeric_limits<float>::max();
-
-	float max_x = -std::numeric_limits<float>::max();
-	float max_y = -std::numeric_limits<float>::max();
-	float max_z = -std::numeric_limits<float>::max();
-
-	// 转换到ransac库的格式
-	PointCloud pc;
-	pc.reserve(n_points);
-	for (auto& p : *cloud)
-	{
-		pc.push_back(Point(Vec3f(p.x, p.y, p.z)));
-
-		if (p.x < min_x) min_x = p.x;
-		else if (p.x > max_x) max_x = p.x;
-
-		if (p.y < min_y) min_y = p.y;
-		else if (p.y > max_y) max_y = p.y;
-
-		if (p.z < min_z) min_z = p.z;
-		else if (p.z > max_z) max_z = p.z;
-	}
-	cout << "Ransac added " << pc.size() << " points" << endl;
-
-	// set the bbox in pc
-	pc.setBBox(Vec3f(min_x, min_y, min_z), Vec3f(max_x, max_y, max_z));
-	cout << "scale " << " " << pc.getScale() << endl;
 	//void calcNormals( float radius, unsigned int kNN = 20, unsigned int maxTries = 100 );
 	pc.calcNormals(.01f * pc.getScale());
-
-	//参数
-	RansacShapeDetector::Options ransacOptions;
-	ransacOptions.m_epsilon = .005f * pc.getScale(); // set distance threshold to .01f of bounding box width
-		// NOTE: Internally the distance threshold is taken as 3 * ransacOptions.m_epsilon!!!
-	ransacOptions.m_bitmapEpsilon = .01f * pc.getScale(); // set bitmap resolution to .02f of bounding box width
-		// NOTE: This threshold is NOT multiplied internally!
-	ransacOptions.m_normalThresh = .9f; // ~25 degree, this is the cos of the maximal normal deviation
-	ransacOptions.m_minSupport = n_points * 0.01f; // this is the minimal numer of points required for a primitive
-	ransacOptions.m_probability = .01f; // this is the "probability" with which a primitive is overlooked
 
 	RansacShapeDetector detector(ransacOptions); // the detector object
 	// set which primitives are to be detected by adding the respective constructors
@@ -263,29 +234,31 @@ int main(int argc, char** argv)
 		// the points of shape i are found in the range
 		// [ pc.size() - \sum_{j=0..i} shapes[j].second, pc.size() - \sum_{j=0..i-1} shapes[j].second )
 
-	cout << "remaining unassigned points " << n_remained << endl;
-	for(int i = 0; i < shapes.size(); ++i)
+	BOOST_LOG_TRIVIAL(debug) << "面提取结果：";
+	for (int i = 0; i < shapes.size(); ++i)
 	{
 		Vec3f normal(0, 0, 0);
 		shapes[i].first->Normal(normal, &normal);
-		cout << "shape " << i << " consists of " << shapes[i].second << " \t"
-			<< normal[0] << " " << normal[1] << " " << normal[2] << " "
-			<< endl;
+		BOOST_LOG_TRIVIAL(debug) << "shape " << i 
+			<< " consists of " << shapes[i].second << " \t"
+			<< normal[0] << " " << normal[1] << " " << normal[2];
 	}
-	cout << endl;
+	BOOST_LOG_TRIVIAL(debug) << "remaining unassigned points: " << n_remained;
 
 	//筛选,阈值：和（0，0，1）角度， 和最小点数
 	std::vector<pcl::PointCloud<pcl::PointXYZRGB>::Ptr> v_cloud;
 	std::vector<Eigen::Vector4f> v_normals;
 	size_t rend = 0;
 	size_t n_result = 0;
+	BOOST_LOG_TRIVIAL(debug) << "垂直面筛选：";
 	for (size_t i = 0; i < shapes.size(); ++i)
 	{
 		Vec3f z(0, 0, 1);
 		float cos_theta = acosf(shapes[i].first->NormalDeviation(z, z)) / M_PI * 180;
-		if ( abs(cos_theta - 90) < 10 && ransacOptions.m_minSupport < shapes[i].second)
+		if (abs(cos_theta - 90) < verticalThreshhold 
+			&& ransacOptions.m_minSupport < shapes[i].second)
 		{
-			cout << "shape " << i <<" cos_theta " << cos_theta << endl;
+			BOOST_LOG_TRIVIAL(debug) << "shape " << i << " acos_theta " << cos_theta;
 			n_result += shapes[i].second;
 
 			int random_r = 255 * (1024 * rand() / (RAND_MAX + 1.0f));
@@ -296,7 +269,6 @@ int main(int argc, char** argv)
 			result->reserve(shapes[i].second);
 			for (size_t p_i = pc.size() - rend - shapes[i].second; p_i < pc.size() - rend; ++p_i)
 			{
-				//cout << "p_i " << p_i << endl;
 				pcl::PointXYZRGB point;
 				point.x = pc[p_i][0]; point.y = pc[p_i][1]; point.z = pc[p_i][2];
 				point.r = random_r; point.g = random_g; point.b = random_b;
@@ -307,7 +279,7 @@ int main(int argc, char** argv)
 			shapes[i].first->Normal(dist, &normal);
 			Eigen::Vector4f coff(normal[0], normal[1], normal[2], dist[0]);
 			if (coff[3] < 0) coff *= -1;
-			cout << "coff " << coff.transpose() << endl;
+			BOOST_LOG_TRIVIAL(debug) << "coff " << coff.transpose();
 			v_normals.push_back(coff);
 		}
 		rend += shapes[i].second;
@@ -315,6 +287,7 @@ int main(int argc, char** argv)
 	//showPoint(v_cloud);
 
 	//计算相互之间的垂直度
+	BOOST_LOG_TRIVIAL(debug) << "相互垂直度损失：";
 	std::vector<float> loss_rect(v_cloud.size(), 0);
 	for (size_t i = 0; i < v_cloud.size(); ++i)
 	{
@@ -329,7 +302,7 @@ int main(int argc, char** argv)
 			loss_rect[i] += std::min(
 				std::min(cos_theta, abs(cos_theta - 90)), 180 - cos_theta) / (v_cloud.size() - 1);
 		}
-		cout << i << " " << loss_rect[i] << endl;
+		BOOST_LOG_TRIVIAL(debug) << i << " " << loss_rect[i];
 	}
 	// 排序
 	std::vector<size_t> arg_loss_rect;
@@ -338,12 +311,13 @@ int main(int argc, char** argv)
 	sort(arg_loss_rect.begin(), arg_loss_rect.end(),
 		[&loss_rect](size_t i1, size_t i2) {return loss_rect[i1] < loss_rect[i2]; });
 
+	std::string s_arg_loss_rect;
 	for (size_t i = 0; i < arg_loss_rect.size(); i++)
 	{
-		cout << arg_loss_rect[i] << " ";
+		s_arg_loss_rect += std::to_string(arg_loss_rect[i]) + " ";
 	}
-	cout << "Min loss normal " << v_normals[arg_loss_rect[0]].head(3).transpose() << endl;
-	cout << endl;
+	BOOST_LOG_TRIVIAL(debug) << s_arg_loss_rect;
+	BOOST_LOG_TRIVIAL(debug) << "Min loss normal " << v_normals[arg_loss_rect[0]].head(3).transpose();
 
 	//转到OpenCV格式
 	std::vector<std::vector<cv::Point2f>> p_2ds;
@@ -367,16 +341,16 @@ int main(int argc, char** argv)
 		viewer->addPointCloud<pcl::PointXYZRGB>(v_cloud[i], cloud_name);
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, cloud_name);
 	}
-	cout << calcSize(p_2ds) << endl;
+	viewer->addCoordinateSystem();
 	//viewer->spin();
 
 	//旋转最垂直边到x轴，
 	Eigen::Vector4f l_rl = v_normals[arg_loss_rect[0]];
 	double theta_2d = acos(-l_rl[1] / sqrt(1.0 * l_rl[0] * l_rl[0] + 1.0 * l_rl[1] * l_rl[1])) / M_PI * 180.0;
-	cout << "Rotate degree " << theta_2d << endl;
+	BOOST_LOG_TRIVIAL(debug) << "旋转角度：" << theta_2d;
 	theta_2d = l_rl[0] < 0 ? -theta_2d : theta_2d;
 	cv::Mat rotation_mat = cv::getRotationMatrix2D(cv::Point2f(0, 0), theta_2d, 1);
-	
+
 	std::vector< std::vector<cv::Point2f>> rotated_points;
 	for (auto& p : p_2ds)
 	{
@@ -388,7 +362,6 @@ int main(int argc, char** argv)
 	std::vector<cv::Point2f> rotated_normals;
 	cv::transform(normals_2d, rotated_normals, rotation_mat);
 
-	
 	//遍历 寻找x y最大最小值
 	float x_minus = 0, y_minus = 0, x_plus = 0, y_plus = 0;
 	for (auto& rotated_point : rotated_points)
@@ -405,15 +378,15 @@ int main(int argc, char** argv)
 
 	if (x_plus - 0 < 0.1 || 0 - x_minus < 0.1 || y_plus - 0 < 0.1 || 0 - y_minus < 0.1)
 	{
-		cout << "不完整房屋。" << endl;
-		return -1;
+		BOOST_LOG_TRIVIAL(error) << "不完整房屋。";
+		return;
 	}
 	float min_area_rect = (x_plus - x_minus) * (y_plus - y_minus);
 
-	cout << "法向量：" << endl;
+	BOOST_LOG_TRIVIAL(debug) << "最终面法向量：";
 	for (auto& n : rotated_normals)
 	{
-		cout << n.x << " " << n.y << endl;
+		BOOST_LOG_TRIVIAL(debug) << n.x << " " << n.y;
 	}
 
 	float x_minus_in = x_minus, y_minus_in = y_minus;
@@ -448,8 +421,8 @@ int main(int argc, char** argv)
 	}
 	float max_area_rect = (x_plus_in - x_minus_in) * (y_plus_in - y_minus_in);
 
-	cout << "外接面积： " << min_area_rect << endl;
-	cout << "内接面积： " << max_area_rect << endl;
+	BOOST_LOG_TRIVIAL(info) << "外接面积：" << min_area_rect;
+	BOOST_LOG_TRIVIAL(info) << "内接面积：" << max_area_rect;
 
 	// 显示带框 二维点云
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr rotated_points_3d(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -458,7 +431,6 @@ int main(int argc, char** argv)
 	{
 		for (auto& p : rotated_point)
 		{
-			//cout << "p_i " << p_i << endl;
 			pcl::PointXYZRGB point;
 			point.x = p.x; point.y = p.y; point.z = 0;
 			point.r = 255; point.g = 255; point.b = 255;
@@ -492,6 +464,113 @@ int main(int argc, char** argv)
 	viewer2->addLine(p4_in, p1_in, "line4_in");
 
 	viewer2->addCoordinateSystem();
-
 	viewer2->spin();
+}
+
+int main(int argc, char** argv)
+{
+	blog::add_console_log(std::cout, blog::keywords::format = "[%Severity%] %Message%");
+
+	std::string file_path;
+	int verticalThreshhold;
+	RansacShapeDetector::Options ransacOptions;
+	bpo::options_description opt("all options");
+	
+	int log_severity;
+	opt.add_options()
+		// 全名和缩写中间不能有空格
+		("file,f", bpo::value<std::string>(&file_path), "point cloud file path")
+		("verticality,v", bpo::value<int>(&verticalThreshhold)->default_value(10), "wall verticality threshold(degree)")
+		("distance,d", bpo::value<float>(&ransacOptions.m_epsilon), "distance threshold(default .005f of bounding box width)")
+		("resolution,r", bpo::value<float>(&ransacOptions.m_bitmapEpsilon), "bitmap resolution(default .01f of bounding box width)")
+		("normal,n", bpo::value<float>(&ransacOptions.m_normalThresh)->default_value(.9f), "cos of the maximal normal deviation")
+		("mini,m", bpo::value<unsigned int>(&ransacOptions.m_minSupport), "minimal number of points required for a primitive")
+		("probability,p", bpo::value<float>(&ransacOptions.m_probability)->default_value(.01f), "probability which a primitive is overlooked")
+		("log,l", bpo::value<int>(&log_severity)->default_value(3), "boost log severity, 1=trace, 2=debug, 3=info, 4=warning, 5=error, 6=fatal")
+		("help,h", "计算单栋点云房屋面积");
+
+	bpo::variables_map vm;
+	try {
+		bpo::store(parse_command_line(argc, argv, opt), vm);
+	}
+	catch (...) {
+		BOOST_LOG_TRIVIAL(error) << "输入的参数中存在未定义的选项！\n";
+		return -1;
+	}
+	bpo::notify(vm);
+
+	initBoostLog(log_severity);
+
+	if (vm.count("help")) {
+		BOOST_LOG_TRIVIAL(info) << opt << std::endl;
+		return 0;
+	}
+
+	if (!vm.count("file")) {
+		BOOST_LOG_TRIVIAL(error) << "必须输入文件名！\n";
+		return -1;
+	}
+
+	// 读取点云
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file_path, *cloud) == -1)
+	{
+		BOOST_LOG_TRIVIAL(error) << "Cloud reading failed." << endl;
+		return -1;
+	}
+
+	std::uint32_t n_points = cloud->width * cloud->height;
+	BOOST_LOG_TRIVIAL(debug) << "Total points: " << n_points << endl;
+
+	move2XOY(cloud);  //移动到原点
+
+	//x, y, z最大最小值，用来计算尺度
+	float min_x = std::numeric_limits<float>::max();
+	float min_y = std::numeric_limits<float>::max();
+	float min_z = std::numeric_limits<float>::max();
+
+	float max_x = -std::numeric_limits<float>::max();
+	float max_y = -std::numeric_limits<float>::max();
+	float max_z = -std::numeric_limits<float>::max();
+
+	// 转换到ransac库的格式
+	PointCloud pc;
+	pc.reserve(n_points);
+	for (auto& p : *cloud)
+	{
+		pc.push_back(Point(Vec3f(p.x, p.y, p.z)));
+
+		if (p.x < min_x) min_x = p.x;
+		else if (p.x > max_x) max_x = p.x;
+
+		if (p.y < min_y) min_y = p.y;
+		else if (p.y > max_y) max_y = p.y;
+
+		if (p.z < min_z) min_z = p.z;
+		else if (p.z > max_z) max_z = p.z;
+	}
+	// set the bbox in pc
+	pc.setBBox(Vec3f(min_x, min_y, min_z), Vec3f(max_x, max_y, max_z));
+	BOOST_LOG_TRIVIAL(debug) << "scale: " << pc.getScale();
+
+	if (!vm.count("distance")) {
+		ransacOptions.m_epsilon = .005f * pc.getScale(); // set distance threshold to .005f of bounding box width
+		// NOTE: Internally the distance threshold is taken as 3 * ransacOptions.m_epsilon!!!
+	}
+	if (!vm.count("resolution")) {
+		ransacOptions.m_bitmapEpsilon = .01f * pc.getScale(); // set bitmap resolution to .01f of bounding box width
+		// NOTE: This threshold is NOT multiplied internally!
+	}
+	if (!vm.count("mini")) {
+		// the minimal number of points required for a primitive
+		ransacOptions.m_minSupport = n_points * 0.01f; 
+	}
+
+	BOOST_LOG_TRIVIAL(debug) << "verticalThreshhold: " << verticalThreshhold;
+	BOOST_LOG_TRIVIAL(debug) << "distance lThreshhold: " << ransacOptions.m_epsilon;
+	BOOST_LOG_TRIVIAL(debug) << "bitmap resolution: " << ransacOptions.m_bitmapEpsilon;
+	BOOST_LOG_TRIVIAL(debug) << "cos of the maximal normal deviation: " << ransacOptions.m_normalThresh;
+	BOOST_LOG_TRIVIAL(debug) << "minimal number of points: " << ransacOptions.m_minSupport;
+	BOOST_LOG_TRIVIAL(debug) << "probability: " << ransacOptions.m_probability;
+	ransacHouseAreaCalc(pc, verticalThreshhold, ransacOptions);
 }

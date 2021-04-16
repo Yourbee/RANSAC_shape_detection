@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 
+#include <boost/regex.hpp>
+#include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
@@ -24,6 +26,7 @@ using std::cout;
 using std::endl;
 namespace bpo = boost::program_options;
 namespace blog = boost::log;
+namespace bfs = boost::filesystem;
 
 //wrong
 int readTXT(std::string file_path, pcl::PointCloud<pcl::PointXYZRGB>& cloud)
@@ -212,10 +215,11 @@ size_t calcSize(std::vector<std::vector<cv::Point2f>> p_2d)
 	return num;
 }
 
-void ransacHouseAreaCalc(
+float ransacHouseAreaCalc(
 	PointCloud& pc,
 	int const verticalThreshhold,
-	RansacShapeDetector::Options& ransacOptions)
+	RansacShapeDetector::Options& ransacOptions,
+	bool flag_show = false)
 {
 	//void calcNormals( float radius, unsigned int kNN = 20, unsigned int maxTries = 100 );
 	pc.calcNormals(.01f * pc.getScale());
@@ -322,7 +326,6 @@ void ransacHouseAreaCalc(
 	//转到OpenCV格式
 	std::vector<std::vector<cv::Point2f>> p_2ds;
 	std::vector<cv::Point2f> normals_2d;
-	pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("3D Viewer"));
 	for (size_t i = 0; i < v_cloud.size(); ++i)
 	{
 		if (loss_rect[i] > 20)
@@ -337,12 +340,19 @@ void ransacHouseAreaCalc(
 		p_2ds.push_back(p_2d);
 		normals_2d.emplace_back(v_normals[i][0], v_normals[i][1]);
 
-		std::string cloud_name = "Cloud " + std::to_string(i);
-		viewer->addPointCloud<pcl::PointXYZRGB>(v_cloud[i], cloud_name);
-		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, cloud_name);
 	}
-	viewer->addCoordinateSystem();
-	//viewer->spin();
+	if (flag_show)
+	{
+		pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("3D Viewer"));
+		for (size_t i = 0; i < v_cloud.size(); ++i)
+		{
+			std::string cloud_name = "Cloud " + std::to_string(i);
+			viewer->addPointCloud<pcl::PointXYZRGB>(v_cloud[i], cloud_name);
+			viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, cloud_name);
+		}
+		viewer->addCoordinateSystem();
+		//viewer->spin();
+	}
 
 	//旋转最垂直边到x轴，
 	Eigen::Vector4f l_rl = v_normals[arg_loss_rect[0]];
@@ -362,6 +372,12 @@ void ransacHouseAreaCalc(
 	std::vector<cv::Point2f> rotated_normals;
 	cv::transform(normals_2d, rotated_normals, rotation_mat);
 
+	BOOST_LOG_TRIVIAL(debug) << "最终面法向量：";
+	for (auto& n : rotated_normals)
+	{
+		BOOST_LOG_TRIVIAL(debug) << n.x << " " << n.y;
+	}
+
 	//遍历 寻找x y最大最小值
 	float x_minus = 0, y_minus = 0, x_plus = 0, y_plus = 0;
 	for (auto& rotated_point : rotated_points)
@@ -379,18 +395,16 @@ void ransacHouseAreaCalc(
 	if (x_plus - 0 < 0.1 || 0 - x_minus < 0.1 || y_plus - 0 < 0.1 || 0 - y_minus < 0.1)
 	{
 		BOOST_LOG_TRIVIAL(error) << "不完整房屋。";
-		return;
+		return -1;
 	}
 	float min_area_rect = (x_plus - x_minus) * (y_plus - y_minus);
+	BOOST_LOG_TRIVIAL(debug) << "外接面积：" << min_area_rect;
 
-	BOOST_LOG_TRIVIAL(debug) << "最终面法向量：";
-	for (auto& n : rotated_normals)
-	{
-		BOOST_LOG_TRIVIAL(debug) << n.x << " " << n.y;
-	}
-
+	// 内接面积, xy上最大 最小为边边界
 	float x_minus_in = x_minus, y_minus_in = y_minus;
 	float x_plus_in = x_plus, y_plus_in = y_plus;
+	std::vector<bool> has_walls(4, false);
+	enum class Direction : unsigned int {y_minus, x_minus, y_plus, x_plus};
 	for (size_t i = 0; i < rotated_normals.size(); ++i)
 	{
 		std::vector<cv::Point2f>& p = rotated_points[i];
@@ -399,93 +413,139 @@ void ransacHouseAreaCalc(
 			float temp = (*std::max_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
 			y_minus_in = temp > y_minus_in ? temp : y_minus_in;
+			has_walls[static_cast<int> (Direction::y_minus)] = true;
 		}
 		else if (0.5 < rotated_normals[i].y)
 		{
 			float temp = (*std::min_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
 			y_plus_in = temp < y_plus_in ? temp : y_plus_in;
+			has_walls[static_cast<int> (Direction::y_plus)] = true;
 		}
 		if (-0.5 > rotated_normals[i].x)
 		{
 			float temp = (*std::max_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
 			x_minus_in = temp > x_minus_in ? temp : x_minus_in;
+			has_walls[static_cast<int> (Direction::x_minus)] = true;
 		}
 		else if (0.5 < rotated_normals[i].x)
 		{
 			float temp = (*std::min_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
 			x_plus_in = temp < x_plus_in ? temp : x_plus_in;
+			has_walls[static_cast<int> (Direction::x_plus)] = true;
 		}
 	}
 	float max_area_rect = (x_plus_in - x_minus_in) * (y_plus_in - y_minus_in);
+	BOOST_LOG_TRIVIAL(debug) << "内接面积：" << max_area_rect;
 
-	BOOST_LOG_TRIVIAL(info) << "外接面积：" << min_area_rect;
-	BOOST_LOG_TRIVIAL(info) << "内接面积：" << max_area_rect;
-
-	// 显示带框 二维点云
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr rotated_points_3d(new pcl::PointCloud<pcl::PointXYZRGB>);
-	rotated_points_3d->reserve(calcSize(rotated_points));
-	for (auto& rotated_point : rotated_points)
+	if (0 == std::count(has_walls.begin(), has_walls.end(), false))
 	{
-		for (auto& p : rotated_point)
-		{
-			pcl::PointXYZRGB point;
-			point.x = p.x; point.y = p.y; point.z = 0;
-			point.r = 255; point.g = 255; point.b = 255;
-			rotated_points_3d->push_back(point);
-		}
+		BOOST_LOG_TRIVIAL(debug) << "该房子四面有墙：";
+		float const fix = 0.2;
+		BOOST_LOG_TRIVIAL(debug) << "补偿值：" << fix;
+		max_area_rect = (x_plus_in - x_minus_in + fix) * (y_plus_in - y_minus_in + fix);
+		BOOST_LOG_TRIVIAL(debug) << "补充内接面积：" << max_area_rect;
 	}
 
-	pcl::visualization::PCLVisualizer::Ptr viewer2(new pcl::visualization::PCLVisualizer("3D Viewer"));
+	if (flag_show)
+	{
+		// 显示带框 二维点云
+		pcl::PointCloud<pcl::PointXYZRGB>::Ptr rotated_points_3d(new pcl::PointCloud<pcl::PointXYZRGB>);
+		rotated_points_3d->reserve(calcSize(rotated_points));
+		for (auto& rotated_point : rotated_points)
+		{
+			for (auto& p : rotated_point)
+			{
+				pcl::PointXYZRGB point;
+				point.x = p.x; point.y = p.y; point.z = 0;
+				point.r = 255; point.g = 255; point.b = 255;
+				rotated_points_3d->push_back(point);
+			}
+		}
 
-	viewer2->addPointCloud<pcl::PointXYZRGB>(rotated_points_3d, "rotated_points_3d");
-	viewer2->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, "rotated_points_3d");
+		pcl::visualization::PCLVisualizer::Ptr viewer2(new pcl::visualization::PCLVisualizer("3D Viewer"));
 
-	pcl::PointXYZ p1, p2, p3, p4;
-	p1.x = x_minus; p1.y = y_minus; p1.z = 0;
-	p2.x = x_plus; p2.y = y_minus; p2.z = 0;
-	p3.x = x_plus; p3.y = y_plus; p3.z = 0;
-	p4.x = x_minus; p4.y = y_plus; p4.z = 0;
-	viewer2->addLine(p1, p2, "line1");
-	viewer2->addLine(p2, p3, "line2");
-	viewer2->addLine(p3, p4, "line3");
-	viewer2->addLine(p4, p1, "line4");
+		viewer2->addPointCloud<pcl::PointXYZRGB>(rotated_points_3d, "rotated_points_3d");
+		viewer2->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, "rotated_points_3d");
 
-	pcl::PointXYZ p1_in, p2_in, p3_in, p4_in;
-	p1_in.x = x_minus_in; p1_in.y = y_minus_in; p1_in.z = 0;
-	p2_in.x = x_plus_in; p2_in.y = y_minus_in; p2_in.z = 0;
-	p3_in.x = x_plus_in; p3_in.y = y_plus_in; p3_in.z = 0;
-	p4_in.x = x_minus_in; p4_in.y = y_plus_in; p4_in.z = 0;
-	viewer2->addLine(p1_in, p2_in, "line1_in");
-	viewer2->addLine(p2_in, p3_in, "line2_in");
-	viewer2->addLine(p3_in, p4_in, "line3_in");
-	viewer2->addLine(p4_in, p1_in, "line4_in");
+		pcl::PointXYZ p1, p2, p3, p4;
+		p1.x = x_minus; p1.y = y_minus; p1.z = 0;
+		p2.x = x_plus; p2.y = y_minus; p2.z = 0;
+		p3.x = x_plus; p3.y = y_plus; p3.z = 0;
+		p4.x = x_minus; p4.y = y_plus; p4.z = 0;
+		viewer2->addLine(p1, p2, "line1");
+		viewer2->addLine(p2, p3, "line2");
+		viewer2->addLine(p3, p4, "line3");
+		viewer2->addLine(p4, p1, "line4");
 
-	viewer2->addCoordinateSystem();
-	viewer2->spin();
+		pcl::PointXYZ p1_in, p2_in, p3_in, p4_in;
+		p1_in.x = x_minus_in; p1_in.y = y_minus_in; p1_in.z = 0;
+		p2_in.x = x_plus_in; p2_in.y = y_minus_in; p2_in.z = 0;
+		p3_in.x = x_plus_in; p3_in.y = y_plus_in; p3_in.z = 0;
+		p4_in.x = x_minus_in; p4_in.y = y_plus_in; p4_in.z = 0;
+		viewer2->addLine(p1_in, p2_in, "line1_in");
+		viewer2->addLine(p2_in, p3_in, "line2_in");
+		viewer2->addLine(p3_in, p4_in, "line3_in");
+		viewer2->addLine(p4_in, p1_in, "line4_in");
+
+		viewer2->addCoordinateSystem();
+		viewer2->spin();
+	}
+
+	return max_area_rect;
 }
+
+boost::regex re("(\\d+)");
+boost::match_results<std::string::const_iterator> what1, what2;
+
+template <typename T>
+T st2num(const std::string& Text)
+{
+	std::stringstream ss(Text);
+	T result;
+	return ss >> result ? result : 0;
+}
+struct mysort
+{
+	bool operator ()(bfs::path p_a, bfs::path p_b)
+	{
+		const std::string a = p_a.filename().string();
+		const std::string b = p_b.filename().string();
+		boost::regex_search(a.cbegin(), a.cend(), what1, re,
+			boost::match_default);
+		boost::regex_search(b.cbegin(), b.cend(), what2, re,
+			boost::match_default);
+
+		return st2num<int>(what1[1]) < st2num<int>(what2[1]);
+
+	}
+};
 
 int main(int argc, char** argv)
 {
 	blog::add_console_log(std::cout, blog::keywords::format = "[%Severity%] %Message%");
 
-	std::string file_path;
+	std::string file;
 	int verticalThreshhold;
+	bool flag_show;
+	int n_calc;
 	RansacShapeDetector::Options ransacOptions;
 	bpo::options_description opt("all options");
 	
 	int log_severity;
 	opt.add_options()
 		// 全名和缩写中间不能有空格
-		("file,f", bpo::value<std::string>(&file_path), "point cloud file path")
+		("file,f", bpo::value<std::string>(&file), "point cloud file or fold path")
 		("verticality,v", bpo::value<int>(&verticalThreshhold)->default_value(10), "wall verticality threshold(degree)")
 		("distance,d", bpo::value<float>(&ransacOptions.m_epsilon), "distance threshold(default .005f of bounding box width)")
 		("resolution,r", bpo::value<float>(&ransacOptions.m_bitmapEpsilon), "bitmap resolution(default .01f of bounding box width)")
 		("normal,n", bpo::value<float>(&ransacOptions.m_normalThresh)->default_value(.9f), "cos of the maximal normal deviation")
 		("mini,m", bpo::value<unsigned int>(&ransacOptions.m_minSupport), "minimal number of points required for a primitive")
 		("probability,p", bpo::value<float>(&ransacOptions.m_probability)->default_value(.01f), "probability which a primitive is overlooked")
+		("calc,c", bpo::value<int>(&n_calc)->default_value(7), "number of calculations to take the medium")
+		("show,s", bpo::value<bool>(&flag_show)->default_value(true), "flag to show pc result")
 		("log,l", bpo::value<int>(&log_severity)->default_value(3), "boost log severity, 1=trace, 2=debug, 3=info, 4=warning, 5=error, 6=fatal")
 		("help,h", "计算单栋点云房屋面积");
 
@@ -507,70 +567,112 @@ int main(int argc, char** argv)
 	}
 
 	if (!vm.count("file")) {
-		BOOST_LOG_TRIVIAL(error) << "必须输入文件名！\n";
+		BOOST_LOG_TRIVIAL(error) << "必须输入 文件/文件夹 名！\n";
 		return -1;
 	}
 
-	// 读取点云
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file_path, *cloud) == -1)
+	bfs::path p(file);
+	std::vector<bfs::path> v_files;
+	try
 	{
-		BOOST_LOG_TRIVIAL(error) << "Cloud reading failed." << endl;
+		if (bfs::is_regular_file(p))
+		{
+			v_files.push_back(p);
+		}
+		else if (bfs::is_directory(p))
+		{
+			BOOST_LOG_TRIVIAL(debug) << p << " is a directory.";
+			for (auto& x : bfs::directory_iterator(p))
+			{
+				if (bfs::extension(x) == ".pcd")
+				{
+					v_files.push_back(x.path());
+				}
+			}
+		}
+		else
+			cout << p << " exists, but is not a regular file or directory\n";
+	}
+	catch (const bfs::filesystem_error& ex)
+	{
+		cout << ex.what() << endl;
 		return -1;
 	}
 
-	std::uint32_t n_points = cloud->width * cloud->height;
-	BOOST_LOG_TRIVIAL(debug) << "Total points: " << n_points << endl;
+	std::sort(v_files.begin(), v_files.end(), mysort());
 
-	move2XOY(cloud);  //移动到原点
-
-	//x, y, z最大最小值，用来计算尺度
-	float min_x = std::numeric_limits<float>::max();
-	float min_y = std::numeric_limits<float>::max();
-	float min_z = std::numeric_limits<float>::max();
-
-	float max_x = -std::numeric_limits<float>::max();
-	float max_y = -std::numeric_limits<float>::max();
-	float max_z = -std::numeric_limits<float>::max();
-
-	// 转换到ransac库的格式
-	PointCloud pc;
-	pc.reserve(n_points);
-	for (auto& p : *cloud)
+	for (auto& file : v_files)
 	{
-		pc.push_back(Point(Vec3f(p.x, p.y, p.z)));
+		cout << file.string() << " ";
+		// 读取点云
+		pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+		if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file.string(), *cloud) == -1)
+		{
+			BOOST_LOG_TRIVIAL(error) << "Cloud reading failed." << endl;
+			return -1;
+		}
 
-		if (p.x < min_x) min_x = p.x;
-		else if (p.x > max_x) max_x = p.x;
+		std::uint32_t n_points = cloud->width * cloud->height;
+		BOOST_LOG_TRIVIAL(debug) << "Total points: " << n_points << endl;
 
-		if (p.y < min_y) min_y = p.y;
-		else if (p.y > max_y) max_y = p.y;
+		move2XOY(cloud);  //移动到原点
 
-		if (p.z < min_z) min_z = p.z;
-		else if (p.z > max_z) max_z = p.z;
+		//x, y, z最大最小值，用来计算尺度
+		float min_x = std::numeric_limits<float>::max();
+		float min_y = std::numeric_limits<float>::max();
+		float min_z = std::numeric_limits<float>::max();
+
+		float max_x = -std::numeric_limits<float>::max();
+		float max_y = -std::numeric_limits<float>::max();
+		float max_z = -std::numeric_limits<float>::max();
+
+		// 转换到ransac库的格式
+		PointCloud pc;
+		pc.reserve(n_points);
+		for (auto& p : *cloud)
+		{
+			pc.push_back(Point(Vec3f(p.x, p.y, p.z)));
+
+			if (p.x < min_x) min_x = p.x;
+			else if (p.x > max_x) max_x = p.x;
+
+			if (p.y < min_y) min_y = p.y;
+			else if (p.y > max_y) max_y = p.y;
+
+			if (p.z < min_z) min_z = p.z;
+			else if (p.z > max_z) max_z = p.z;
+		}
+		// set the bbox in pc
+		pc.setBBox(Vec3f(min_x, min_y, min_z), Vec3f(max_x, max_y, max_z));
+		BOOST_LOG_TRIVIAL(debug) << "scale: " << pc.getScale();
+
+		if (!vm.count("distance")) {
+			ransacOptions.m_epsilon = .005f * pc.getScale(); // set distance threshold to .005f of bounding box width
+			// NOTE: Internally the distance threshold is taken as 3 * ransacOptions.m_epsilon!!!
+		}
+		if (!vm.count("resolution")) {
+			ransacOptions.m_bitmapEpsilon = .01f * pc.getScale(); // set bitmap resolution to .01f of bounding box width
+			// NOTE: This threshold is NOT multiplied internally!
+		}
+		if (!vm.count("mini")) {
+			// the minimal number of points required for a primitive
+			ransacOptions.m_minSupport = n_points * 0.01f;
+		}
+
+		BOOST_LOG_TRIVIAL(debug) << "verticalThreshhold: " << verticalThreshhold;
+		BOOST_LOG_TRIVIAL(debug) << "distance lThreshhold: " << ransacOptions.m_epsilon;
+		BOOST_LOG_TRIVIAL(debug) << "bitmap resolution: " << ransacOptions.m_bitmapEpsilon;
+		BOOST_LOG_TRIVIAL(debug) << "cos of the maximal normal deviation: " << ransacOptions.m_normalThresh;
+		BOOST_LOG_TRIVIAL(debug) << "minimal number of points: " << ransacOptions.m_minSupport;
+		BOOST_LOG_TRIVIAL(debug) << "probability: " << ransacOptions.m_probability;
+		std::vector<float> v_area;
+		v_area.reserve(n_calc);
+		for (size_t i = 0; i < n_calc; ++i)
+		{
+			v_area.push_back(ransacHouseAreaCalc(pc, verticalThreshhold, ransacOptions, flag_show));
+		}
+		sort(v_area.begin(), v_area.end());
+		cout << "内面积: "
+			<< v_area[n_calc / 2]<< endl;
 	}
-	// set the bbox in pc
-	pc.setBBox(Vec3f(min_x, min_y, min_z), Vec3f(max_x, max_y, max_z));
-	BOOST_LOG_TRIVIAL(debug) << "scale: " << pc.getScale();
-
-	if (!vm.count("distance")) {
-		ransacOptions.m_epsilon = .005f * pc.getScale(); // set distance threshold to .005f of bounding box width
-		// NOTE: Internally the distance threshold is taken as 3 * ransacOptions.m_epsilon!!!
-	}
-	if (!vm.count("resolution")) {
-		ransacOptions.m_bitmapEpsilon = .01f * pc.getScale(); // set bitmap resolution to .01f of bounding box width
-		// NOTE: This threshold is NOT multiplied internally!
-	}
-	if (!vm.count("mini")) {
-		// the minimal number of points required for a primitive
-		ransacOptions.m_minSupport = n_points * 0.01f; 
-	}
-
-	BOOST_LOG_TRIVIAL(debug) << "verticalThreshhold: " << verticalThreshhold;
-	BOOST_LOG_TRIVIAL(debug) << "distance lThreshhold: " << ransacOptions.m_epsilon;
-	BOOST_LOG_TRIVIAL(debug) << "bitmap resolution: " << ransacOptions.m_bitmapEpsilon;
-	BOOST_LOG_TRIVIAL(debug) << "cos of the maximal normal deviation: " << ransacOptions.m_normalThresh;
-	BOOST_LOG_TRIVIAL(debug) << "minimal number of points: " << ransacOptions.m_minSupport;
-	BOOST_LOG_TRIVIAL(debug) << "probability: " << ransacOptions.m_probability;
-	ransacHouseAreaCalc(pc, verticalThreshhold, ransacOptions);
 }

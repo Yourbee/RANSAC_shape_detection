@@ -15,7 +15,7 @@ add_library(libransac STATIC  ${SRC} ${MISC_SRC})
 
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(Boost COMPONENTS program_options log)
+find_package(Boost COMPONENTS program_options log filesystem regex)
 
 add_definitions(${PCL_DEFINITIONS})
 include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})

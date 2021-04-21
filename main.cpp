@@ -408,31 +408,55 @@ float ransacHouseAreaCalc(
 	for (size_t i = 0; i < rotated_normals.size(); ++i)
 	{
 		std::vector<cv::Point2f>& p = rotated_points[i];
-		if (-0.5 > rotated_normals[i].y)
+		if (-0.5 > rotated_normals[i].y) // 左边
 		{
 			float temp = (*std::max_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
-			y_minus_in = temp > y_minus_in ? temp : y_minus_in;
+			if (has_walls[static_cast<int> (Direction::y_minus)])  // 一面存到多道墙，选取最外墙
+			{
+				if (temp < y_minus_in) 
+					y_minus_in = temp;
+			}
+			else
+				y_minus_in = temp > y_minus_in ? temp : y_minus_in;
 			has_walls[static_cast<int> (Direction::y_minus)] = true;
 		}
-		else if (0.5 < rotated_normals[i].y)
+		else if (0.5 < rotated_normals[i].y) // 右边
 		{
 			float temp = (*std::min_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.y < j.y; })).y;
-			y_plus_in = temp < y_plus_in ? temp : y_plus_in;
+			if (has_walls[static_cast<int> (Direction::y_plus)])  // 一面存到多道墙，选取最外墙
+			{
+				if (temp > y_plus_in)
+					y_plus_in = temp;
+			}
+			else
+				y_plus_in = temp < y_plus_in ? temp : y_plus_in;
 			has_walls[static_cast<int> (Direction::y_plus)] = true;
 		}
-		if (-0.5 > rotated_normals[i].x)
+		if (-0.5 > rotated_normals[i].x) // 下边
 		{
 			float temp = (*std::max_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
-			x_minus_in = temp > x_minus_in ? temp : x_minus_in;
+			if (has_walls[static_cast<int> (Direction::x_minus)])  // 一面存到多道墙，选取最外墙
+			{
+				if (temp < x_minus_in)
+					x_minus_in = temp;
+			}
+			else
+				x_minus_in = temp > x_minus_in ? temp : x_minus_in;
 			has_walls[static_cast<int> (Direction::x_minus)] = true;
 		}
-		else if (0.5 < rotated_normals[i].x)
+		else if (0.5 < rotated_normals[i].x)  // 上边
 		{
 			float temp = (*std::min_element(p.begin(), p.end(),
 				[](cv::Point2f& i, cv::Point2f& j) {return i.x < j.x; })).x;
+			if (has_walls[static_cast<int> (Direction::x_plus)])  // 一面存到多道墙，选取最外墙
+			{
+				if (temp > x_plus_in)
+					x_plus_in = temp;
+			}
+			else
 			x_plus_in = temp < x_plus_in ? temp : x_plus_in;
 			has_walls[static_cast<int> (Direction::x_plus)] = true;
 		}
@@ -603,7 +627,7 @@ int main(int argc, char** argv)
 
 	for (auto& file : v_files)
 	{
-		cout << file.string() << " ";
+		cout << file.stem().string() << " ";
 		// 读取点云
 		pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 		if (pcl::io::loadPCDFile <pcl::PointXYZRGB>(file.string(), *cloud) == -1)
